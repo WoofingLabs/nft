@@ -101,9 +101,8 @@
             font-size: 14px; 
             color: #ff8c00; 
         }
-        .batch-transfer textarea { 
+        .batch-transfer textarea, .batch-transfer input { 
             width: 100%; 
-            height: 120px; 
             padding: 8px; 
             border-radius: 5px; 
             border: 1px solid #ff8c00; 
@@ -111,13 +110,8 @@
             color: #fff; 
             font-size: 14px; 
         }
-        .batch-transfer input { 
-            width: 100%; 
-            padding: 8px; 
-            border-radius: 5px; 
-            border: 1px solid #ff8c00; 
-            background: #1a1a1a; 
-            color: #fff; 
+        .batch-transfer textarea { 
+            height: 120px; 
         }
         @media (max-width: 768px) {
             h1 { font-size: 28px; }
@@ -125,8 +119,7 @@
             .action-btn { padding: 8px 16px; font-size: 14px; }
             .modal-content { max-width: 90%; padding: 15px; }
             .nft-viewer h2 { font-size: 20px; }
-            .batch-transfer textarea { font-size: 12px; }
-            .batch-transfer input { font-size: 12px; }
+            .batch-transfer textarea, .batch-transfer input { font-size: 12px; }
         }
     </style>
 </head>
@@ -141,6 +134,8 @@
     <div class="batch-transfer">
         <label for="contractAddress">NFT 合约地址:</label>
         <input type="text" id="contractAddress" placeholder="0xbf13ed020dcf22bc8216a23a1167a5dd1fdc2d0e">
+        <label for="startTokenId">起始 tokenId:</label>
+        <input type="number" id="startTokenId" placeholder="10000" value="10000">
         <button id="approveBtn" class="action-btn" onclick="approveContract()" disabled>授权所有 NFT</button>
         <label for="batchInput">批量转账 (每行: 地址,数量，总数最大 200):</label>
         <textarea id="batchInput" placeholder="例如：
@@ -162,11 +157,10 @@
 
     <script src="https://cdn.jsdelivr.net/npm/web3@1.7.0/dist/web3.min.js"></script>
     <script>
-        let web3, accounts, nftContract, multiCallContract, cachedTokenIds = new Set(), isApproved = false;
+        let web3, accounts, nftContract, multiCallContract, cachedTokenIds = new Set(), isApproved = false, lastTokenId = null;
         const MULTICALL_CONTRACT_ADDRESS = "0xf5Ca72AA5C22C7e2B24c398090C3bcec00795424";
         const X_LAYER_CHAIN_ID = "0xc4"; // Chain ID 196
         const MAX_TOTAL_TRANSFER = 200; // 总转账数量限制
-        const MIN_TOKEN_ID = 20000; // tokenId 从 20,000 开始
         const MAX_TOKEN_ID = 1000000; // 假设最大 tokenId 为 1,000,000
 
         const ERC721_ABI = [
@@ -338,6 +332,11 @@
                 return;
             }
             const batchInput = document.getElementById('batchInput').value.trim();
+            const startTokenIdInput = document.getElementById('startTokenId').value.trim();
+            let startTokenId = parseInt(startTokenIdInput) || 10000;
+            if (lastTokenId !== null && lastTokenId >= startTokenId) {
+                startTokenId = lastTokenId + 1; // 从上次结束的 tokenId 继续
+            }
             const fetchButton = document.getElementById('fetchNFTsBtn');
             fetchButton.classList.add('loading');
             fetchButton.disabled = true;
@@ -380,9 +379,9 @@
                     showModal(`NFT 不足：您有 ${balance} 个，需 ${totalAmount} 个。`);
                     throw new Error('NFT 不足');
                 }
-                showModal(`正在查询 ${totalAmount} 个 NFT...`);
+                showModal(`从 tokenId ${startTokenId} 开始查询 ${totalAmount} 个 NFT...`);
                 cachedTokenIds = new Set();
-                // 查询 Transfer 事件
+                // 优先尝试 Transfer 事件查询
                 try {
                     const events = await retryWithBackoff(() => 
                         nftContract.getPastEvents('Transfer', {
@@ -393,24 +392,27 @@
                     );
                     for (const event of events) {
                         const tokenId = event.returnValues.tokenId;
-                        try {
-                            const owner = await retryWithBackoff(() => 
-                                nftContract.methods.ownerOf(tokenId).call()
-                            );
-                            if (owner.toLowerCase() === accounts[0].toLowerCase() && !cachedTokenIds.has(tokenId)) {
-                                cachedTokenIds.add(tokenId);
+                        if (parseInt(tokenId) >= startTokenId && !cachedTokenIds.has(tokenId)) {
+                            try {
+                                const owner = await retryWithBackoff(() => 
+                                    nftContract.methods.ownerOf(tokenId).call()
+                                );
+                                if (owner.toLowerCase() === accounts[0].toLowerCase()) {
+                                    cachedTokenIds.add(tokenId);
+                                    lastTokenId = Math.max(lastTokenId || 0, parseInt(tokenId));
+                                }
+                            } catch (error) {
+                                console.warn(`tokenId ${tokenId} 验证失败: ${error.message}`);
                             }
-                        } catch (error) {
-                            console.warn(`tokenId ${tokenId} 验证失败: ${error.message}`);
+                            if (cachedTokenIds.size >= totalAmount) break;
                         }
-                        if (cachedTokenIds.size >= totalAmount) break;
                     }
                 } catch (error) {
                     console.warn(`事件查询失败: ${error.message}`);
                     // Fallback: 扫描 tokenId 范围
-                    showModal('事件查询失败，尝试扫描 tokenId 范围...');
-                    let tokenId = MIN_TOKEN_ID;
-                    const maxAttempts = Math.min(totalAmount * 10, 10000); // 限制扫描次数
+                    showModal(`事件查询失败，从 tokenId ${startTokenId} 开始扫描...`);
+                    let tokenId = startTokenId;
+                    const maxAttempts = Math.min(totalAmount * 10, 10000);
                     let attempts = 0;
                     while (cachedTokenIds.size < totalAmount && tokenId <= MAX_TOKEN_ID && attempts < maxAttempts) {
                         try {
@@ -419,6 +421,7 @@
                             );
                             if (owner.toLowerCase() === accounts[0].toLowerCase() && !cachedTokenIds.has(tokenId)) {
                                 cachedTokenIds.add(tokenId);
+                                lastTokenId = tokenId;
                             }
                         } catch (error) {
                             console.warn(`tokenId ${tokenId} 验证失败: ${error.message}`);
@@ -430,12 +433,13 @@
                 }
                 if (cachedTokenIds.size < totalAmount) {
                     nftList.innerHTML = `<p>仅获取到 ${cachedTokenIds.size} 个 NFT。</p>`;
-                    showModal(`获取 NFT 失败：仅获取到 ${cachedTokenIds.size}/${totalAmount} 个 NFT。请检查合约地址（推荐: 0xbf13ed020dcf22bc8216a23a1167a5dd1fdc2d0e）或联系支持提供您的 tokenId 列表。`);
+                    showModal(`获取 NFT 失败：仅获取到 ${cachedTokenIds.size}/${totalAmount} 个 NFT。请检查合约地址（推荐: 0xbf13ed020dcf22bc8216a23a1167a5dd1fdc2d0e）或调整起始 tokenId。`);
                     throw new Error('NFT 不足');
                 }
-                const tokenIdArray = Array.from(cachedTokenIds);
+                const tokenIdArray = Array.from(cachedTokenIds).sort((a, b) => a - b);
                 nftList.innerHTML = `<p>获取 ${cachedTokenIds.size} 个 NFT，示例：${tokenIdArray.slice(0, 5).join(', ')}${tokenIdArray.length > 5 ? ' 等...' : ''}</p>`;
                 document.getElementById('batchTransferBtn').disabled = false;
+                document.getElementById('startTokenId').value = lastTokenId + 1; // 更新输入框为下次起始 tokenId
             } catch (error) {
                 showModal(`获取 NFT 失败: ${error.message.includes('429') ? 'API 速率限制，请稍后重试或更换 RPC 节点' : error.message || '未知错误'}<br>请确认合约地址（推荐: 0xbf13ed020dcf22bc8216a23a1167a5dd1fdc2d0e）。`);
                 nftList.innerHTML = '<p>查询 NFT 失败。</p>';
@@ -560,6 +564,7 @@
             accounts = newAccounts;
             cachedTokenIds = new Set();
             isApproved = false;
+            lastTokenId = null;
             updateWalletAddress();
             if (newAccounts.length === 0) {
                 document.getElementById('approveBtn').disabled = true;
