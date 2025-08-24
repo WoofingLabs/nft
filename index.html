@@ -381,6 +381,7 @@
                 }
                 showModal(`从 tokenId ${startTokenId} 开始查询 ${totalAmount} 个 NFT...`);
                 cachedTokenIds = new Set();
+                let endTokenId = startTokenId;
                 // 优先尝试 Transfer 事件查询
                 try {
                     const events = await retryWithBackoff(() => 
@@ -390,6 +391,7 @@
                             toBlock: 'latest'
                         })
                     );
+                    console.log(`查询到 ${events.length} 个 Transfer 事件`);
                     for (const event of events) {
                         const tokenId = event.returnValues.tokenId;
                         if (parseInt(tokenId) >= startTokenId && !cachedTokenIds.has(tokenId)) {
@@ -399,11 +401,14 @@
                                 );
                                 if (owner.toLowerCase() === accounts[0].toLowerCase()) {
                                     cachedTokenIds.add(tokenId);
-                                    lastTokenId = Math.max(lastTokenId || 0, parseInt(tokenId));
+                                    endTokenId = Math.max(endTokenId, parseInt(tokenId));
+                                    console.log(`添加 tokenId ${tokenId}`);
+                                } else {
+                                    console.log(`跳过 tokenId ${tokenId}：不属于当前地址`);
                                 }
                             } catch (error) {
-                                console.warn(`tokenId ${tokenId} 验证失败: ${error.message}`);
-                                // 跳过无效 tokenId，继续查询
+                                console.log(`跳过 tokenId ${tokenId}：验证失败 (${error.message})`);
+                                // 跳过无效 tokenId
                             }
                             if (cachedTokenIds.size >= totalAmount) break;
                         }
@@ -413,7 +418,7 @@
                     // Fallback: 扫描 tokenId 范围
                     showModal(`事件查询失败，从 tokenId ${startTokenId} 开始扫描...`);
                     let tokenId = startTokenId;
-                    const maxAttempts = Math.min(totalAmount * 10, 10000);
+                    const maxAttempts = Math.min(totalAmount * 10, 5000); // 限制扫描次数
                     let attempts = 0;
                     while (cachedTokenIds.size < totalAmount && tokenId <= MAX_TOKEN_ID && attempts < maxAttempts) {
                         try {
@@ -422,20 +427,24 @@
                             );
                             if (owner.toLowerCase() === accounts[0].toLowerCase() && !cachedTokenIds.has(tokenId)) {
                                 cachedTokenIds.add(tokenId);
-                                lastTokenId = tokenId;
+                                endTokenId = tokenId;
+                                console.log(`添加 tokenId ${tokenId}`);
+                            } else {
+                                console.log(`跳过 tokenId ${tokenId}：不属于当前地址`);
                             }
                         } catch (error) {
-                            console.warn(`tokenId ${tokenId} 验证失败: ${error.message}`);
-                            // 跳过无效 tokenId，继续查询
+                            console.log(`跳过 tokenId ${tokenId}：验证失败 (${error.message})`);
+                            // 跳过无效 tokenId
                         }
                         tokenId++;
                         attempts++;
-                        nftList.innerHTML = `<p>已获取 ${cachedTokenIds.size}/${totalAmount} 个 NFT...</p>`;
+                        nftList.innerHTML = `<p>已获取 ${cachedTokenIds.size}/${totalAmount} 个 NFT，当前 tokenId: ${tokenId}...</p>`;
                     }
                 }
+                lastTokenId = endTokenId;
                 if (cachedTokenIds.size < totalAmount) {
                     nftList.innerHTML = `<p>仅获取到 ${cachedTokenIds.size} 个 NFT。</p>`;
-                    showModal(`获取 NFT 失败：仅获取到 ${cachedTokenIds.size}/${totalAmount} 个 NFT。请检查合约地址（推荐: 0xbf13ed020dcf22bc8216a23a1167a5dd1fdc2d0e）或调整起始 tokenId。`);
+                    showModal(`获取 NFT 失败：仅获取到 ${cachedTokenIds.size}/${totalAmount} 个 NFT（查询范围: ${startTokenId} 到 ${endTokenId}）。请检查合约地址（推荐: 0xbf13ed020dcf22bc8216a23a1167a5dd1fdc2d0e）或调整起始 tokenId。`);
                     throw new Error('NFT 不足');
                 }
                 const tokenIdArray = Array.from(cachedTokenIds).sort((a, b) => a - b);
