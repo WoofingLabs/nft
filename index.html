@@ -111,12 +111,6 @@
             flex-direction: column; 
             align-items: center; 
         }
-        .nft-card img { 
-            width: 100%; 
-            max-width: 150px; 
-            height: auto; 
-            border-radius: 5px; 
-        }
         .nft-card p { 
             font-size: 14px; 
             margin: 5px 0; 
@@ -178,7 +172,6 @@
             .nft-viewer h2 { font-size: 24px; }
             #nftList { grid-template-columns: repeat(2, 1fr); gap: 10px; }
             .nft-card { padding: 8px; }
-            .nft-card img { max-width: 120px; }
             .nft-card p { font-size: 12px; }
             .nft-card input { padding: 4px; font-size: 10px; }
             .nft-card .action-btn { padding: 5px 10px; font-size: 10px; }
@@ -200,10 +193,10 @@
         <label for="contractAddress">NFT 合约地址:</label>
         <input type="text" id="contractAddress" placeholder="请输入 NFT 合约地址 (如 0xbf13ed020dcf22bc8216a23a1167a5dd1fdc2d0e)">
         <button id="approveBtn" class="action-btn" onclick="approveContract()" disabled>授权合约</button>
-        <label for="batchInput">批量转账 (格式: 每行一个地址,数量，最大总数 100):</label>
+        <label for="batchInput">批量转账 (格式: 每行一个地址,数量，单次最大 50，总数 100):</label>
         <textarea id="batchInput" placeholder="例如：
-0x394E7b6F051f0c34417d87831E156EBbbbdDA490,1
-0x6d128f9717280eED5553d714972B16fdfDcC5c90,1"></textarea>
+0x394E7b6F051f0c34417d87831E156EBbbbdDA490,2
+0x6d128f9717280eED5553d714972B16fdfDcC5c90,3"></textarea>
         <button id="batchTransferBtn" class="action-btn" onclick="batchTransferNFTs()" disabled>批量转账</button>
     </div>
     <div class="nft-viewer">
@@ -219,9 +212,10 @@
 
     <script src="https://cdn.jsdelivr.net/npm/web3@1.7.0/dist/web3.min.js"></script>
     <script>
-        let web3, accounts, nftContract, multiCallContract;
+        let web3, accounts, nftContract, multiCallContract, cachedTokenIds = [];
         const MULTICALL_CONTRACT_ADDRESS = "0xf5Ca72AA5C22C7e2B24c398090C3bcec00795424";
         const X_LAYER_CHAIN_ID = "0xc4"; // Chain ID 196 in hexadecimal
+        const MAX_BATCH_TRANSFER = 50; // 单次批量转账最大数量
 
         const ERC721_ABI = [
             {"inputs":[{"internalType":"address","name":"to","type":"address"},{"internalType":"uint256","name":"tokenId","type":"uint256"}],"name":"approve","outputs":[],"stateMutability":"nonpayable","type":"function"},
@@ -235,7 +229,8 @@
             {"inputs":[{"internalType":"address","name":"owner","type":"address"},{"internalType":"uint256","name":"index","type":"uint256"}],"name":"tokenOfOwnerByIndex","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},
             {"inputs":[{"internalType":"uint256","name":"index","type":"uint256"}],"name":"tokenByIndex","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},
             {"inputs":[],"name":"totalSupply","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},
-            {"inputs":[{"internalType":"uint256","name":"tokenId","type":"uint256"}],"name":"tokenName","outputs":[{"internalType":"string","name":"","type":"string"}],"stateMutability":"view","type":"function"}
+            {"inputs":[{"internalType":"uint256","name":"tokenId","type":"uint256"}],"name":"tokenName","outputs":[{"internalType":"string","name":"","type":"string"}],"stateMutability":"view","type":"function"},
+            {"inputs":[{"internalType":"uint256","name":"tokenId","type":"uint256"}],"name":"ownerOf","outputs":[{"internalType":"address","name":"","type":"address"}],"stateMutability":"view","type":"function"}
         ];
 
         const MULTICALL_CONTRACT_ABI = [
@@ -318,7 +313,7 @@
             document.getElementById('modal').style.display = 'none';
         }
 
-        async function retryWithBackoff(fn, maxRetries = 3, delay = 1000) {
+        async function retryWithBackoff(fn, maxRetries = 5, delay = 1000) {
             for (let i = 0; i < maxRetries; i++) {
                 try {
                     return await fn();
@@ -326,7 +321,7 @@
                     if (error.message.includes('429') && i < maxRetries - 1) {
                         console.warn(`429 错误，重试 ${i + 1}/${maxRetries}，延迟 ${delay}ms`);
                         await new Promise(resolve => setTimeout(resolve, delay));
-                        delay *= 2; // 指数退避
+                        delay = Math.min(delay * 2, 8000); // 最大延迟 8 秒
                         continue;
                     }
                     throw error;
@@ -405,7 +400,7 @@
             } catch (error) {
                 console.error('授权错误:', error);
                 if (error.message.includes('429')) {
-                    showModal('授权失败: API 速率限制超出，请稍后重试或更换 RPC 节点。');
+                    showModal('授权失败: API 速率限制超出，请稍后重试或更换 RPC 节点（推荐 https://xlayerrpc.okx.com）。');
                 } else {
                     showModal(`授权失败: ${error.message || '未知错误'}<br>请检查 NFT 合约地址（推荐: 0xbf13ed020dcf22bc8216a23a1167a5dd1fdc2d0e）或 OKB 余额是否充足。`);
                 }
@@ -429,59 +424,38 @@
                 );
                 if (balance == 0) {
                     nftList.innerHTML = '<p>您在此合约下没有持有任何 NFT。</p>';
+                    cachedTokenIds = [];
                     return;
                 }
-                if (balance > 1) {
-                    showModal('注意：此 NFT 合约限制每个地址只能持有一个 NFT，可能不支持批量转账多个 NFT。');
-                }
-                const tokenIds = [];
+                showModal(`检测到您持有 ${balance} 个 NFT，正在获取 tokenId...`);
+                cachedTokenIds = [];
                 for (let i = 0; i < balance; i++) {
                     const tokenId = await retryWithBackoff(() => 
                         nftContract.methods.tokenOfOwnerByIndex(accounts[0], i).call()
                     );
-                    tokenIds.push(tokenId);
-                }
-                nftList.innerHTML = '';
-                for (const tokenId of tokenIds) {
-                    const tokenURI = await retryWithBackoff(() => 
-                        nftContract.methods.tokenURI(tokenId).call()
+                    // 验证 tokenId 归属
+                    const owner = await retryWithBackoff(() => 
+                        nftContract.methods.ownerOf(tokenId).call()
                     );
-                    await displayNFT(tokenId, tokenURI);
+                    if (owner.toLowerCase() !== accounts[0].toLowerCase()) {
+                        console.warn(`tokenId ${tokenId} 不属于 ${accounts[0]}`);
+                        continue;
+                    }
+                    cachedTokenIds.push(tokenId);
+                }
+                nftList.innerHTML = `<p>共持有 ${cachedTokenIds.length} 个 NFT，tokenId 列表：${cachedTokenIds.slice(0, 10).join(', ')}${cachedTokenIds.length > 10 ? ' 等...' : ''}</p>`;
+                if (cachedTokenIds.length === 0) {
+                    showModal('未找到属于您的有效 NFT，请检查合约地址或钱包余额。');
                 }
             } catch (error) {
                 console.error('获取 NFT 错误:', error);
                 if (error.message.includes('429')) {
-                    showModal('获取 NFT 失败: API 速率限制超出，请稍后重试或更换 RPC 节点。');
+                    showModal('获取 NFT 失败: API 速率限制超出，请稍后重试或更换 RPC 节点（推荐 https://xlayerrpc.okx.com）。');
                 } else {
                     showModal(`获取 NFT 失败: ${error.message || '未知错误'}<br>请确认 NFT 合约地址正确（推荐: 0xbf13ed020dcf22bc8216a23a1167a5dd1fdc2d0e）或支持 tokenOfOwnerByIndex 函数。`);
                 }
                 nftList.innerHTML = '<p>加载 NFT 失败。</p>';
             }
-        }
-
-        async function displayNFT(tokenId, tokenURI) {
-            const nftList = document.getElementById('nftList');
-            let metadata;
-            try {
-                if (tokenURI.startsWith('data:application/json;base64,')) {
-                    const base64Data = tokenURI.split(',')[1];
-                    metadata = JSON.parse(atob(base64Data));
-                } else {
-                    const response = await fetch(tokenURI);
-                    metadata = await response.json();
-                }
-            } catch {
-                metadata = { name: `Token #${tokenId}`, image: 'https://via.placeholder.com/150' };
-            }
-            const nftDiv = document.createElement('div');
-            nftDiv.className = 'nft-card';
-            nftDiv.innerHTML = `
-                <img src="${metadata.image || 'https://via.placeholder.com/150'}" alt="${metadata.name}">
-                <p>${metadata.name} (ID: ${tokenId})</p>
-                <input type="text" id="transferAddress${tokenId}" placeholder="接收者地址">
-                <button class="action-btn" onclick="transferNFT(${tokenId})">转账</button>
-            `;
-            nftList.appendChild(nftDiv);
         }
 
         async function transferNFT(tokenId) {
@@ -491,16 +465,16 @@
                 return;
             }
             const transferAddress = document.getElementById(`transferAddress${tokenId}`).value;
-            if (!web3.utils.isAddress(transferAddress)) {
+            if (!web3.utils.isAddress(transferAddress) || transferAddress === '0x0000000000000000000000000000000000000000') {
                 showModal('无效的接收者地址！');
                 return;
             }
             try {
-                const balance = await retryWithBackoff(() => 
-                    nftContract.methods.balanceOf(transferAddress).call()
+                const owner = await retryWithBackoff(() => 
+                    nftContract.methods.ownerOf(tokenId).call()
                 );
-                if (balance > 0) {
-                    showModal('接收者地址已持有 NFT，无法转账！此合约限制每个地址只能持有一个 NFT。');
+                if (owner.toLowerCase() !== accounts[0].toLowerCase()) {
+                    showModal(`tokenId ${tokenId} 不属于您，无法转账！`);
                     return;
                 }
                 showModal('正在转账 NFT...');
@@ -512,11 +486,14 @@
                     gas: Math.floor(gasEstimate * 1.2) 
                 });
                 showModal('NFT 转账成功！');
+                cachedTokenIds = cachedTokenIds.filter(id => id !== tokenId);
                 fetchOwnedNFTs();
             } catch (error) {
                 console.error('转账错误:', error);
                 if (error.message.includes('429')) {
                     showModal('转账失败: API 速率限制超出，请稍后重试或更换 RPC 节点。');
+                } else if (error.message.includes('non ERC721Receiver')) {
+                    showModal('转账失败: 接收者地址可能是无效合约地址，请确保接收者支持 ERC721。');
                 } else {
                     showModal(`转账失败: ${error.message || '未知错误'}<br>请检查 OKB 余额、接收者地址或授权状态。`);
                 }
@@ -556,7 +533,7 @@
                 let totalAmount = 0;
                 for (const line of lines) {
                     const [address, amountStr] = line.split(',').map(item => item.trim());
-                    if (!web3.utils.isAddress(address)) {
+                    if (!web3.utils.isAddress(address) || address === '0x0000000000000000000000000000000000000000') {
                         showModal(`无效地址: ${address}`);
                         throw new Error('无效地址');
                     }
@@ -565,40 +542,24 @@
                         showModal(`地址 ${address} 的数量无效: ${amountStr}`);
                         throw new Error('无效数量');
                     }
-                    const balance = await retryWithBackoff(() => 
-                        nftContract.methods.balanceOf(address).call()
-                    );
-                    if (balance > 0) {
-                        showModal(`地址 ${address} 已持有 NFT，无法转账！此合约限制每个地址只能持有一个 NFT。`);
-                        throw new Error('接收者已持有 NFT');
-                    }
                     transfers.push({ address, amount });
                     totalAmount += amount;
                 }
-                if (totalAmount > 100) {
-                    showModal('总转账数量超过 100 个 NFT。');
-                    throw new Error('数量超限');
+                if (totalAmount > MAX_BATCH_TRANSFER) {
+                    showModal(`单次批量转账数量超过 ${MAX_BATCH_TRANSFER} 个 NFT，请分批转账。`);
+                    throw new Error('单次数量超限');
                 }
-                const balance = await retryWithBackoff(() => 
-                    nftContract.methods.balanceOf(accounts[0]).call()
-                );
-                if (balance < totalAmount) {
-                    showModal(`您仅拥有 ${balance} 个 NFT，但请求转账 ${totalAmount} 个。`);
+                if (totalAmount > 100) {
+                    showModal('总转账数量超过 100 个 NFT，请减少数量或分批操作。');
+                    throw new Error('总数量超限');
+                }
+                if (cachedTokenIds.length < totalAmount) {
+                    showModal(`您仅拥有 ${cachedTokenIds.length} 个 NFT，但请求转账 ${totalAmount} 个。请先加载 NFT 或减少转账数量。`);
                     throw new Error('NFT 数量不足');
                 }
-                if (balance > 1) {
-                    showModal('注意：此 NFT 合约限制每个地址只能持有一个 NFT，您可能无法批量转账多个 NFT。');
-                }
-                const tokenIds = [];
-                for (let i = 0; i < balance; i++) {
-                    const tokenId = await retryWithBackoff(() => 
-                        nftContract.methods.tokenOfOwnerByIndex(accounts[0], i).call()
-                    );
-                    tokenIds.push(tokenId);
-                }
-                const shuffledTokenIds = shuffleArray([...tokenIds]);
                 const toAddresses = [];
                 const selectedTokenIds = [];
+                const shuffledTokenIds = shuffleArray([...cachedTokenIds]);
                 let tokenIndex = 0;
                 for (const { address, amount } of transfers) {
                     for (let i = 0; i < amount; i++) {
@@ -606,8 +567,17 @@
                             showModal('可用的 NFT 数量不足以完成批量转账！');
                             throw new Error('NFT 数量不足');
                         }
+                        const tokenId = shuffledTokenIds[tokenIndex];
+                        const owner = await retryWithBackoff(() => 
+                            nftContract.methods.ownerOf(tokenId).call()
+                        );
+                        if (owner.toLowerCase() !== accounts[0].toLowerCase()) {
+                            showModal(`tokenId ${tokenId} 不属于您，无法转账！`);
+                            throw new Error('tokenId 不属于调用者');
+                        }
                         toAddresses.push(address);
-                        selectedTokenIds.push(shuffledTokenIds[tokenIndex++]);
+                        selectedTokenIds.push(tokenId);
+                        tokenIndex++;
                     }
                 }
                 showModal(`正在准备转账 ${totalAmount} 个 NFT...`);
@@ -624,16 +594,20 @@
                     selectedTokenIds
                 ).send({ from: accounts[0], gas: Math.floor(gasEstimate * 1.2) });
                 showModal('批量转账成功！');
+                cachedTokenIds = cachedTokenIds.filter(id => !selectedTokenIds.includes(id));
                 fetchOwnedNFTs();
             } catch (error) {
                 console.error('批量转账错误:', error);
                 if (error.message.includes('429')) {
-                    showModal('批量转账失败: API 速率限制超出，请稍后重试或更换 RPC 节点。');
+                    showModal('批量转账失败: API 速率限制超出，请稍后重试或更换 RPC 节点（推荐 https://xlayerrpc.okx.com）。');
                 } else if (error.message.includes('Invalid substring range')) {
-                    showModal('批量转账失败: MultiCall 合约调用错误，可能与 tokenId 或接收者地址不兼容。请确认输入的 tokenId 和地址有效。');
+                    showModal('批量转账失败: 可能是无效的 tokenId 或接收者地址。请测试单笔转账或检查输入数据。');
+                } else if (error.message.includes('non ERC721Receiver')) {
+                    showModal('批量转账失败: 接收者地址可能是无效合约地址，请确保所有接收者支持 ERC721。');
                 } else if (!error.message.includes('输入为空') && !error.message.includes('无效地址') && 
-                           !error.message.includes('无效数量') && !error.message.includes('数量超限') && 
-                           !error.message.includes('NFT 数量不足') && !error.message.includes('接收者已持有 NFT')) {
+                           !error.message.includes('无效数量') && !error.message.includes('单次数量超限') && 
+                           !error.message.includes('总数量超限') && !error.message.includes('NFT 数量不足') && 
+                           !error.message.includes('tokenId 不属于调用者')) {
                     showModal(`批量转账失败: ${error.message || '未知错误'}<br>请检查 OKB 余额、NFT 合约地址（推荐: 0xbf13ed020dcf22bc8216a23a1167a5dd1fdc2d0e）或授权状态。`);
                 }
             } finally {
@@ -654,6 +628,7 @@
 
         window.ethereum?.on('accountsChanged', (newAccounts) => {
             accounts = newAccounts;
+            cachedTokenIds = [];
             updateWalletAddress();
             if (newAccounts.length === 0) {
                 document.getElementById('approveBtn').disabled = true;
