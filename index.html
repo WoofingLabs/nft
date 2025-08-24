@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NFT Batch Transfer - X Layer</title>
+    <title>NFT 批量转账 - X Layer</title>
     <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@700&display=swap" rel="stylesheet">
     <style>
         body { 
@@ -190,37 +190,37 @@
 </head>
 <body>
     <div class="header">
-        <h1>NFT Batch Transfer - X Layer</h1>
+        <h1>NFT 批量转账 - X Layer</h1>
         <div class="wallet-info">
-            Wallet: <span id="walletAddress">Not connected</span>
+            钱包地址: <span id="walletAddress">未连接</span>
         </div>
-        <button id="connectWalletBtn" class="action-btn">Connect Wallet</button>
+        <button id="connectWalletBtn" class="action-btn">连接钱包</button>
     </div>
     <div class="batch-transfer">
-        <label for="contractAddress">NFT Contract Address:</label>
-        <input type="text" id="contractAddress" value="0xf5Ca72AA5C22C7e2B24c398090C3bcec00795424" placeholder="Enter NFT contract address">
-        <button id="approveBtn" class="action-btn" onclick="approveContract()" disabled>Approve Contract</button>
-        <label for="batchInput">Batch Transfer (Format: address,amount per line, max total 100):</label>
-        <textarea id="batchInput" placeholder="e.g.
+        <label for="contractAddress">NFT 合约地址:</label>
+        <input type="text" id="contractAddress" placeholder="请输入 NFT 合约地址">
+        <button id="approveBtn" class="action-btn" onclick="approveContract()" disabled>授权合约</button>
+        <label for="batchInput">批量转账 (格式: 每行一个地址,数量，最大总数 100):</label>
+        <textarea id="batchInput" placeholder="例如：
 0x394E7b6F051f0c34417d87831E156EBbbbdDA490,8
 0x6d128f9717280eED5553d714972B16fdfDcC5c90,6"></textarea>
-        <button id="batchTransferBtn" class="action-btn" onclick="batchTransferNFTs()" disabled>Batch Transfer</button>
+        <button id="batchTransferBtn" class="action-btn" onclick="batchTransferNFTs()" disabled>批量转账</button>
     </div>
     <div class="nft-viewer">
-        <h2>Your NFTs</h2>
+        <h2>您的 NFT</h2>
         <div id="nftList"></div>
     </div>
     <div id="modal" class="modal">
         <div class="modal-content">
             <p id="modalMessage"></p>
-            <button onclick="closeModal()">OK</button>
+            <button onclick="closeModal()">确定</button>
         </div>
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/web3@1.7.0/dist/web3.min.js"></script>
     <script>
         let web3, accounts, nftContract, multiCallContract;
-        const MULTICALL_CONTRACT_ADDRESS = "0xC0e5f06aD47986B0F0755F85eE5D949241F8E76A";
+        const MULTICALL_CONTRACT_ADDRESS = "0xf5Ca72AA5C22C7e2B24c398090C3bcec00795424";
         const X_LAYER_CHAIN_ID = "0xc4"; // Chain ID 196 in hexadecimal
 
         const ERC721_ABI = [
@@ -264,14 +264,27 @@
                             }],
                         });
                     } catch (addError) {
-                        console.error('Failed to add X Layer network:', addError);
-                        showModal('Failed to add X Layer mainnet. Please add it manually in your wallet.');
+                        console.error('添加 X Layer 网络失败:', addError);
+                        showModal('无法添加 X Layer 主网，请在钱包中手动添加网络。');
                     }
                 } else {
-                    console.error('Failed to switch to X Layer network:', switchError);
-                    showModal('Failed to switch to X Layer mainnet. Please switch to X Layer mainnet (Chain ID: 196) in your wallet.');
+                    console.error('切换到 X Layer 网络失败:', switchError);
+                    showModal('无法切换到 X Layer 主网，请在钱包中切换到 X Layer 主网（Chain ID: 196）。');
                 }
             }
+        }
+
+        async function checkNetwork() {
+            const chainId = await window.ethereum.request({ method: 'eth_chainId' });
+            if (chainId !== X_LAYER_CHAIN_ID) {
+                await switchToXLayer();
+                const newChainId = await window.ethereum.request({ method: 'eth_chainId' });
+                if (newChainId !== X_LAYER_CHAIN_ID) {
+                    showModal('请切换到 X Layer 主网（Chain ID: 196）以继续操作。');
+                    return false;
+                }
+            }
+            return true;
         }
 
         function showModal(message) {
@@ -287,32 +300,25 @@
             const connectButton = document.getElementById('connectWalletBtn');
             connectButton.classList.add('loading');
             if (!window.ethereum) {
-                showModal('No wallet detected. Please install <a href="https://metamask.io" target="_blank">MetaMask</a>.');
+                showModal('未检测到钱包，请安装 <a href="https://metamask.io" target="_blank">MetaMask</a>。');
                 connectButton.classList.remove('loading');
                 return;
             }
             try {
                 web3 = new Web3(window.ethereum);
-                const chainId = await window.ethereum.request({ method: 'eth_chainId' });
-                if (chainId !== X_LAYER_CHAIN_ID) {
-                    await switchToXLayer();
-                    // Re-check chainId after attempting to switch
-                    const newChainId = await window.ethereum.request({ method: 'eth_chainId' });
-                    if (newChainId !== X_LAYER_CHAIN_ID) {
-                        showModal('Please switch to X Layer mainnet (Chain ID: 196) to continue.');
-                        connectButton.classList.remove('loading');
-                        return;
-                    }
+                if (!(await checkNetwork())) {
+                    connectButton.classList.remove('loading');
+                    return;
                 }
                 accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
-                console.log('Connected to chain:', chainId, 'Account:', accounts[0]);
+                console.log('已连接到网络:', X_LAYER_CHAIN_ID, '账户:', accounts[0]);
                 multiCallContract = new web3.eth.Contract(MULTICALL_CONTRACT_ABI, MULTICALL_CONTRACT_ADDRESS);
-                showModal('Wallet connected successfully to X Layer mainnet!');
+                showModal('钱包已成功连接到 X Layer 主网！');
                 updateWalletAddress();
                 document.getElementById('approveBtn').disabled = false;
             } catch (error) {
-                console.error('Wallet connection error:', error);
-                showModal(`Connection failed: ${error.message || 'Unknown error'}`);
+                console.error('钱包连接错误:', error);
+                showModal(`连接失败: ${error.message || '未知错误'}`);
             } finally {
                 connectButton.classList.remove('loading');
             }
@@ -320,7 +326,7 @@
 
         async function updateWalletAddress() {
             if (!accounts || accounts.length === 0) {
-                document.getElementById('walletAddress').innerText = 'Not connected';
+                document.getElementById('walletAddress').innerText = '未连接';
             } else {
                 const shortAddress = `${accounts[0].slice(0, 6)}...${accounts[0].slice(-4)}`;
                 document.getElementById('walletAddress').innerText = shortAddress;
@@ -328,35 +334,35 @@
         }
 
         async function approveContract() {
+            if (!(await checkNetwork())) return;
             const contractAddress = document.getElementById('contractAddress').value.trim();
             if (!web3.utils.isAddress(contractAddress)) {
-                showModal('Invalid contract address!');
+                showModal('无效的 NFT 合约地址！');
                 return;
             }
             const approveButton = document.getElementById('approveBtn');
             approveButton.classList.add('loading');
             approveButton.disabled = true;
             try {
-                const chainId = await window.ethereum.request({ method: 'eth_chainId' });
-                if (chainId !== X_LAYER_CHAIN_ID) {
-                    showModal('Please switch to X Layer mainnet (Chain ID: 196) to continue.');
-                    return;
-                }
                 nftContract = new web3.eth.Contract(ERC721_ABI, contractAddress);
                 const isApproved = await nftContract.methods.isApprovedForAll(accounts[0], MULTICALL_CONTRACT_ADDRESS).call();
                 if (isApproved) {
-                    showModal('Contract already approved!');
+                    showModal('合约已授权！');
                     document.getElementById('batchTransferBtn').disabled = false;
                     fetchOwnedNFTs();
                 } else {
-                    await nftContract.methods.setApprovalForAll(MULTICALL_CONTRACT_ADDRESS, true).send({ from: accounts[0] });
-                    showModal('Contract approved successfully!');
+                    const gasEstimate = await nftContract.methods.setApprovalForAll(MULTICALL_CONTRACT_ADDRESS, true).estimateGas({ from: accounts[0] });
+                    await nftContract.methods.setApprovalForAll(MULTICALL_CONTRACT_ADDRESS, true).send({ 
+                        from: accounts[0], 
+                        gas: Math.floor(gasEstimate * 1.2) 
+                    });
+                    showModal('合约授权成功！');
                     document.getElementById('batchTransferBtn').disabled = false;
                     fetchOwnedNFTs();
                 }
             } catch (error) {
-                console.error('Approval error:', error);
-                showModal(`Approval failed: ${error.message || 'Unknown error'}`);
+                console.error('授权错误:', error);
+                showModal(`授权失败: ${error.message || '未知错误'}<br>请检查 NFT 合约地址是否正确。`);
             } finally {
                 approveButton.classList.remove('loading');
                 approveButton.disabled = false;
@@ -364,21 +370,17 @@
         }
 
         async function fetchOwnedNFTs() {
+            if (!(await checkNetwork())) return;
             if (!web3 || !nftContract || !accounts) {
-                showModal('Please connect your wallet and approve the contract!');
-                return;
-            }
-            const chainId = await window.ethereum.request({ method: 'eth_chainId' });
-            if (chainId !== X_LAYER_CHAIN_ID) {
-                showModal('Please switch to X Layer mainnet (Chain ID: 196) to continue.');
+                showModal('请先连接钱包并授权合约！');
                 return;
             }
             const nftList = document.getElementById('nftList');
-            nftList.innerHTML = '<p>Loading your NFTs...</p>';
+            nftList.innerHTML = '<p>正在加载您的 NFT...</p>';
             try {
                 const tokenIds = await nftContract.methods.walletOfOwner(accounts[0]).call();
                 if (tokenIds.length === 0) {
-                    nftList.innerHTML = '<p>You don’t own any NFTs for this contract.</p>';
+                    nftList.innerHTML = '<p>您在此合约下没有持有任何 NFT。</p>';
                     return;
                 }
                 nftList.innerHTML = '';
@@ -387,9 +389,9 @@
                     await displayNFT(tokenId, tokenURI);
                 }
             } catch (error) {
-                console.error('Fetch NFTs error:', error);
-                showModal(`Failed to fetch NFTs: ${error.message || 'Unknown error'}`);
-                nftList.innerHTML = '<p>Error loading NFTs.</p>';
+                console.error('获取 NFT 错误:', error);
+                showModal(`获取 NFT 失败: ${error.message || '未知错误'}<br>请确认 NFT 合约支持 walletOfOwner 函数。`);
+                nftList.innerHTML = '<p>加载 NFT 失败。</p>';
             }
         }
 
@@ -412,35 +414,35 @@
             nftDiv.innerHTML = `
                 <img src="${metadata.image || 'https://via.placeholder.com/150'}" alt="${metadata.name}">
                 <p>${metadata.name} (ID: ${tokenId})</p>
-                <input type="text" id="transferAddress${tokenId}" placeholder="Recipient Address">
-                <button class="action-btn" onclick="transferNFT(${tokenId})">Transfer</button>
+                <input type="text" id="transferAddress${tokenId}" placeholder="接收者地址">
+                <button class="action-btn" onclick="transferNFT(${tokenId})">转账</button>
             `;
             nftList.appendChild(nftDiv);
         }
 
         async function transferNFT(tokenId) {
+            if (!(await checkNetwork())) return;
             if (!web3 || !nftContract || !accounts) {
-                showModal('Please connect your wallet and approve the contract!');
-                return;
-            }
-            const chainId = await window.ethereum.request({ method: 'eth_chainId' });
-            if (chainId !== X_LAYER_CHAIN_ID) {
-                showModal('Please switch to X Layer mainnet (Chain ID: 196) to continue.');
+                showModal('请先连接钱包并授权合约！');
                 return;
             }
             const transferAddress = document.getElementById(`transferAddress${tokenId}`).value;
             if (!web3.utils.isAddress(transferAddress)) {
-                showModal('Invalid recipient address!');
+                showModal('无效的接收者地址！');
                 return;
             }
             try {
-                showModal('Transferring NFT...');
-                await nftContract.methods.safeTransferFrom(accounts[0], transferAddress, tokenId).send({ from: accounts[0] });
-                showModal('NFT transferred successfully!');
+                showModal('正在转账 NFT...');
+                const gasEstimate = await nftContract.methods.safeTransferFrom(accounts[0], transferAddress, tokenId).estimateGas({ from: accounts[0] });
+                await nftContract.methods.safeTransferFrom(accounts[0], transferAddress, tokenId).send({ 
+                    from: accounts[0], 
+                    gas: Math.floor(gasEstimate * 1.2) 
+                });
+                showModal('NFT 转账成功！');
                 fetchOwnedNFTs();
             } catch (error) {
-                console.error('Transfer error:', error);
-                showModal(`Transfer failed: ${error.message || 'Unknown error'}`);
+                console.error('转账错误:', error);
+                showModal(`转账失败: ${error.message || '未知错误'}<br>请检查 OKB 余额或接收者地址。`);
             }
         }
 
@@ -453,18 +455,14 @@
         }
 
         async function batchTransferNFTs() {
+            if (!(await checkNetwork())) return;
             if (!web3 || !nftContract || !multiCallContract || !accounts) {
-                showModal('Please connect your wallet and approve the contract!');
-                return;
-            }
-            const chainId = await window.ethereum.request({ method: 'eth_chainId' });
-            if (chainId !== X_LAYER_CHAIN_ID) {
-                showModal('Please switch to X Layer mainnet (Chain ID: 196) to continue.');
+                showModal('请先连接钱包并授权合约！');
                 return;
             }
             const contractAddress = document.getElementById('contractAddress').value.trim();
             if (!web3.utils.isAddress(contractAddress)) {
-                showModal('Invalid contract address!');
+                showModal('无效的 NFT 合约地址！');
                 return;
             }
             const batchInput = document.getElementById('batchInput').value.trim();
@@ -474,33 +472,33 @@
             try {
                 const lines = batchInput.split('\n').filter(line => line.trim() !== '');
                 if (lines.length === 0) {
-                    showModal('Please provide at least one address and amount.');
-                    throw new Error('Empty input');
+                    showModal('请至少提供一个地址和数量。');
+                    throw new Error('输入为空');
                 }
                 const transfers = [];
                 let totalAmount = 0;
                 for (const line of lines) {
                     const [address, amountStr] = line.split(',').map(item => item.trim());
                     if (!web3.utils.isAddress(address)) {
-                        showModal(`Invalid address: ${address}`);
-                        throw new Error('Invalid address');
+                        showModal(`无效地址: ${address}`);
+                        throw new Error('无效地址');
                     }
                     const amount = parseInt(amountStr);
                     if (isNaN(amount) || amount < 1) {
-                        showModal(`Invalid amount for address ${address}: ${amountStr}`);
-                        throw new Error('Invalid amount');
+                        showModal(`地址 ${address} 的数量无效: ${amountStr}`);
+                        throw new Error('无效数量');
                     }
                     transfers.push({ address, amount });
                     totalAmount += amount;
                 }
                 if (totalAmount > 100) {
-                    showModal('Total transfer amount exceeds 100 NFTs.');
-                    throw new Error('Amount limit exceeded');
+                    showModal('总转账数量超过 100 个 NFT。');
+                    throw new Error('数量超限');
                 }
                 const tokenIds = await nftContract.methods.walletOfOwner(accounts[0]).call();
                 if (tokenIds.length < totalAmount) {
-                    showModal(`You only own ${tokenIds.length} NFTs, but requested to transfer ${totalAmount}.`);
-                    throw new Error('Insufficient NFTs');
+                    showModal(`您仅拥有 ${tokenIds.length} 个 NFT，但请求转账 ${totalAmount} 个。`);
+                    throw new Error('NFT 数量不足');
                 }
                 const shuffledTokenIds = shuffleArray([...tokenIds]);
                 const toAddresses = [];
@@ -512,20 +510,25 @@
                         selectedTokenIds.push(shuffledTokenIds[tokenIndex++]);
                     }
                 }
-                showModal(`Preparing to transfer ${totalAmount} NFTs...`);
+                showModal(`正在准备转账 ${totalAmount} 个 NFT...`);
+                const gasEstimate = await multiCallContract.methods.batchTransfer(
+                    contractAddress,
+                    toAddresses,
+                    selectedTokenIds
+                ).estimateGas({ from: accounts[0] });
                 await multiCallContract.methods.batchTransfer(
                     contractAddress,
                     toAddresses,
                     selectedTokenIds
-                ).send({ from: accounts[0] });
-                showModal('Batch transfer completed successfully!');
+                ).send({ from: accounts[0], gas: Math.floor(gasEstimate * 1.2) });
+                showModal('批量转账成功！');
                 fetchOwnedNFTs();
             } catch (error) {
-                console.error('Batch transfer error:', error);
-                if (!error.message.includes('Empty input') && !error.message.includes('Invalid address') && 
-                    !error.message.includes('Invalid amount') && !error.message.includes('Amount limit exceeded') && 
-                    !error.message.includes('Insufficient NFTs')) {
-                    showModal(`Batch transfer failed: ${error.message || 'Unknown error'}`);
+                console.error('批量转账错误:', error);
+                if (!error.message.includes('输入为空') && !error.message.includes('无效地址') && 
+                    !error.message.includes('无效数量') && !error.message.includes('数量超限') && 
+                    !error.message.includes('NFT 数量不足')) {
+                    showModal(`批量转账失败: ${error.message || '未知错误'}<br>请检查 OKB 余额、NFT 合约地址或 MultiCall 合约兼容性。`);
                 }
             } finally {
                 batchButton.classList.remove('loading');
@@ -535,7 +538,7 @@
 
         window.onload = () => {
             if (!window.ethereum) {
-                showModal('No wallet detected. Please install <a href="https://metamask.io" target="_blank">MetaMask</a>.');
+                showModal('未检测到钱包，请安装 <a href="https://metamask.io" target="_blank">MetaMask</a>。');
             }
         };
 
