@@ -161,7 +161,7 @@
         const MULTICALL_CONTRACT_ADDRESS = "0xf5Ca72AA5C22C7e2B24c398090C3bcec00795424";
         const X_LAYER_CHAIN_ID = "0xc4"; // Chain ID 196
         const MAX_TOTAL_TRANSFER = 200; // 总转账数量限制
-        const MAX_TOKEN_ID = 1000000; // 假设最大 tokenId 为 1,000,000
+        const MAX_TOKEN_ID = 1000000; // 最大 tokenId
 
         const ERC721_ABI = [
             {"inputs":[{"internalType":"address","name":"owner","type":"address"}],"name":"balanceOf","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},
@@ -403,6 +403,7 @@
                                 }
                             } catch (error) {
                                 console.warn(`tokenId ${tokenId} 验证失败: ${error.message}`);
+                                // 跳过无效 tokenId，继续查询
                             }
                             if (cachedTokenIds.size >= totalAmount) break;
                         }
@@ -425,6 +426,7 @@
                             }
                         } catch (error) {
                             console.warn(`tokenId ${tokenId} 验证失败: ${error.message}`);
+                            // 跳过无效 tokenId，继续查询
                         }
                         tokenId++;
                         attempts++;
@@ -439,7 +441,7 @@
                 const tokenIdArray = Array.from(cachedTokenIds).sort((a, b) => a - b);
                 nftList.innerHTML = `<p>获取 ${cachedTokenIds.size} 个 NFT，示例：${tokenIdArray.slice(0, 5).join(', ')}${tokenIdArray.length > 5 ? ' 等...' : ''}</p>`;
                 document.getElementById('batchTransferBtn').disabled = false;
-                document.getElementById('startTokenId').value = lastTokenId + 1; // 更新输入框为下次起始 tokenId
+                document.getElementById('startTokenId').value = lastTokenId + 1; // 更新输入框
             } catch (error) {
                 showModal(`获取 NFT 失败: ${error.message.includes('429') ? 'API 速率限制，请稍后重试或更换 RPC 节点' : error.message || '未知错误'}<br>请确认合约地址（推荐: 0xbf13ed020dcf22bc8216a23a1167a5dd1fdc2d0e）。`);
                 nftList.innerHTML = '<p>查询 NFT 失败。</p>';
