@@ -162,8 +162,9 @@
         <button id="approveBtn" class="action-btn" onclick="approveContract()" disabled>授权所有 NFT</button>
         <label for="batchInput">批量转账 (每行: 地址,数量，总数最大 200):</label>
         <textarea id="batchInput" placeholder="例如：
-0x394E7b6F051f0c34417d87831E156EBbbbdDA490,50
-0x6d128f9717280eED5553d714972B16fdfDcC5c90,50"></textarea>
+0x394E7b6F051f0c34417d87831E156EBbbbdDA490,100
+0x6d128f9717280eED5553d714972B16fdfDcC5c90,100"></textarea>
+        <button id="fetchNFTsBtn" class="action-btn" onclick="fetchOwnedNFTsFromInput()" disabled>获取 NFT</button>
         <button id="batchTransferBtn" class="action-btn" onclick="batchTransferNFTs()" disabled>批量转账</button>
     </div>
     <div class="nft-viewer">
@@ -186,7 +187,6 @@
         const BATCH_FETCH_SIZE = 50; // 每次获取 tokenId 批次大小
 
         const ERC721_ABI = [
-            {"inputs":[{"internalType":"address","name":"to","type":"address"},{"internalType":"uint256","name":"tokenId","type":"uint256"}],"name":"approve","outputs":[],"stateMutability":"nonpayable","type":"function"},
             {"inputs":[{"internalType":"address","name":"owner","type":"address"}],"name":"balanceOf","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},
             {"inputs":[{"internalType":"address","name":"owner","type":"address"},{"internalType":"address","name":"operator","type":"address"}],"name":"isApprovedForAll","outputs":[{"internalType":"bool","name":"","type":"bool"}],"stateMutability":"view","type":"function"},
             {"inputs":[{"internalType":"address","name":"operator","type":"address"},{"internalType":"bool","name":"_approved","type":"bool"}],"name":"setApprovalForAll","outputs":[],"stateMutability":"nonpayable","type":"function"},
@@ -288,6 +288,7 @@
                 showModal('钱包已连接！');
                 updateWalletAddress();
                 document.getElementById('approveBtn').disabled = false;
+                document.getElementById('fetchNFTsBtn').disabled = false;
             } catch (error) {
                 showModal(`连接失败: ${error.message || '未知错误'}`);
             } finally {
@@ -315,18 +316,14 @@
             approveButton.disabled = true;
             try {
                 nftContract = new web3.eth.Contract(ERC721_ABI, contractAddress);
-                if (isApproved) {
-                    showModal('合约已授权！');
-                    document.getElementById('batchTransferBtn').disabled = false;
-                    return;
-                }
                 const isApprovedCheck = await retryWithBackoff(() => 
                     nftContract.methods.isApprovedForAll(accounts[0], MULTICALL_CONTRACT_ADDRESS).call()
                 );
                 if (isApprovedCheck) {
                     isApproved = true;
                     showModal('合约已授权！');
-                    document.getElementById('batchTransferBtn').disabled = false;
+                    document.getElementById('fetchNFTsBtn').disabled = false;
+                    document.getElementById('batchTransferBtn').disabled = true; // 需先获取 NFT
                 } else {
                     const gasEstimate = await retryWithBackoff(() => 
                         nftContract.methods.setApprovalForAll(MULTICALL_CONTRACT_ADDRESS, true).estimateGas({ from: accounts[0] })
@@ -337,7 +334,8 @@
                     });
                     isApproved = true;
                     showModal('授权成功！');
-                    document.getElementById('batchTransferBtn').disabled = false;
+                    document.getElementById('fetchNFTsBtn').disabled = false;
+                    document.getElementById('batchTransferBtn').disabled = true;
                 }
             } catch (error) {
                 showModal(`授权失败: ${error.message.includes('429') ? 'API 速率限制，请稍后重试' : error.message || '未知错误'}`);
@@ -347,36 +345,68 @@
             }
         }
 
-        async function fetchOwnedNFTs(neededAmount) {
-            if (!(await checkNetwork())) return false;
+        async function fetchOwnedNFTsFromInput() {
+            if (!(await checkNetwork())) return;
             if (!web3 || !nftContract || !accounts) {
                 showModal('请先连接钱包并授权！');
-                return false;
+                return;
             }
-            const nftList = document.getElementById('nftList');
-            nftList.innerHTML = '<p>正在加载 NFT...</p>';
+            const contractAddress = document.getElementById('contractAddress').value.trim();
+            if (!web3.utils.isAddress(contractAddress)) {
+                showModal('无效的 NFT 合约地址！');
+                return;
+            }
+            const batchInput = document.getElementById('batchInput').value.trim();
+            const fetchButton = document.getElementById('fetchNFTsBtn');
+            fetchButton.classList.add('loading');
+            fetchButton.disabled = true;
             try {
+                const lines = batchInput.split('\n').filter(line => line.trim() !== '');
+                if (lines.length === 0) {
+                    showModal('请输入至少一个地址和数量！');
+                    throw new Error('输入为空');
+                }
+                let totalAmount = 0;
+                for (const line of lines) {
+                    const [address, amountStr] = line.split(',').map(item => item.trim());
+                    if (!web3.utils.isAddress(address) || address === '0x0000000000000000000000000000000000000000') {
+                        showModal(`无效地址: ${address}`);
+                        throw new Error('无效地址');
+                    }
+                    const amount = parseInt(amountStr);
+                    if (isNaN(amount) || amount < 1) {
+                        showModal(`无效数量: ${amountStr}`);
+                        throw new Error('无效数量');
+                    }
+                    totalAmount += amount;
+                }
+                if (totalAmount > MAX_TOTAL_TRANSFER) {
+                    showModal(`总数超过 ${MAX_TOTAL_TRANSFER} 个 NFT！`);
+                    throw new Error('总数超限');
+                }
+                const nftList = document.getElementById('nftList');
+                nftList.innerHTML = '<p>正在加载 NFT...</p>';
                 const balance = await retryWithBackoff(() => 
                     nftContract.methods.balanceOf(accounts[0]).call()
                 );
                 if (balance == 0) {
                     nftList.innerHTML = '<p>您没有持有任何 NFT。</p>';
                     showModal('您没有持有任何 NFT！');
-                    return false;
+                    throw new Error('无 NFT');
                 }
-                if (balance < neededAmount) {
-                    nftList.innerHTML = `<p>您仅持有 ${balance} 个 NFT，需 ${neededAmount} 个。</p>`;
-                    showModal(`NFT 不足：您有 ${balance} 个，需 ${neededAmount} 个。`);
-                    return false;
+                if (balance < totalAmount) {
+                    nftList.innerHTML = `<p>您仅持有 ${balance} 个 NFT，需 ${totalAmount} 个。</p>`;
+                    showModal(`NFT 不足：您有 ${balance} 个，需 ${totalAmount} 个。`);
+                    throw new Error('NFT 不足');
                 }
-                showModal(`正在随机获取 ${neededAmount} 个 NFT...`);
+                showModal(`正在随机获取 ${totalAmount} 个 NFT...`);
                 cachedTokenIds = [];
                 const indices = Array.from({ length: balance }, (_, i) => i);
                 for (let i = indices.length - 1; i > 0; i--) {
                     const j = Math.floor(Math.random() * (i + 1));
                     [indices[i], indices[j]] = [indices[j], indices[i]];
                 }
-                const selectedIndices = indices.slice(0, neededAmount);
+                const selectedIndices = indices.slice(0, totalAmount);
                 const batchSize = BATCH_FETCH_SIZE;
                 for (let i = 0; i < selectedIndices.length; i += batchSize) {
                     const batchIndices = selectedIndices.slice(i, i + batchSize);
@@ -393,14 +423,16 @@
                     batchResults.forEach(({ tokenId, owner }) => {
                         if (owner.toLowerCase() === accounts[0].toLowerCase()) {
                             cachedTokenIds.push(tokenId);
+                        } else {
+                            console.warn(`tokenId ${tokenId} 不属于 ${accounts[0]}`);
                         }
                     });
-                    nftList.innerHTML = `<p>已获取 ${cachedTokenIds.length}/${neededAmount} 个 NFT...</p>`;
+                    nftList.innerHTML = `<p>已获取 ${cachedTokenIds.length}/${totalAmount} 个 NFT...</p>`;
                 }
-                if (cachedTokenIds.length < neededAmount) {
+                if (cachedTokenIds.length < totalAmount) {
                     nftList.innerHTML = `<p>仅获取到 ${cachedTokenIds.length} 个 NFT。</p>`;
                     showModal('获取的 NFT 数量不足！');
-                    return false;
+                    throw new Error('NFT 不足');
                 }
                 nftList.innerHTML = `<p>获取 ${cachedTokenIds.length} 个 NFT，示例：${cachedTokenIds.slice(0, 5).join(', ')}${cachedTokenIds.length > 5 ? ' 等...' : ''}</p>`;
                 if (cachedTokenIds.length > 0) {
@@ -412,11 +444,13 @@
                             <button class="action-btn" onclick="transferNFT(${tokenId})">测试单笔转账</button>
                         </div>`;
                 }
-                return true;
+                document.getElementById('batchTransferBtn').disabled = false;
             } catch (error) {
                 showModal(`获取 NFT 失败: ${error.message.includes('429') ? 'API 速率限制，请稍后重试' : error.message || '未知错误'}`);
                 nftList.innerHTML = '<p>加载 NFT 失败。</p>';
-                return false;
+            } finally {
+                fetchButton.classList.remove('loading');
+                fetchButton.disabled = false;
             }
         }
 
@@ -467,6 +501,16 @@
             batchButton.classList.add('loading');
             batchButton.disabled = true;
             try {
+                if (!isApproved) {
+                    const isApprovedCheck = await retryWithBackoff(() => 
+                        nftContract.methods.isApprovedForAll(accounts[0], MULTICALL_CONTRACT_ADDRESS).call()
+                    );
+                    if (!isApprovedCheck) {
+                        showModal('请先授权 JACEMultiCall 合约！');
+                        throw new Error('未授权');
+                    }
+                    isApproved = true;
+                }
                 const lines = batchInput.split('\n').filter(line => line.trim() !== '');
                 if (lines.length === 0) {
                     showModal('请输入至少一个地址和数量！');
@@ -492,29 +536,19 @@
                     showModal(`总数超过 ${MAX_TOTAL_TRANSFER} 个 NFT！`);
                     throw new Error('总数超限');
                 }
-                const fetchSuccess = await fetchOwnedNFTs(totalAmount);
-                if (!fetchSuccess) {
-                    throw new Error('获取 NFT 失败');
-                }
                 if (cachedTokenIds.length < totalAmount) {
-                    showModal(`仅获取到 ${cachedTokenIds.length} 个 NFT，需 ${totalAmount} 个！`);
+                    showModal(`已获取 ${cachedTokenIds.length} 个 NFT，需 ${totalAmount} 个，请重新获取！`);
                     throw new Error('NFT 不足');
                 }
                 const toAddresses = [];
                 const selectedTokenIds = [];
-                const shuffledTokenIds = cachedTokenIds.slice();
-                for (let i = shuffledTokenIds.length - 1; i > 0; i--) {
-                    const j = Math.floor(Math.random() * (i + 1));
-                    [shuffledTokenIds[i], shuffledTokenIds[j]] = [shuffledTokenIds[j], shuffledTokenIds[i]];
-                }
-                let tokenIndex = 0;
                 for (const { address, amount } of transfers) {
                     for (let i = 0; i < amount; i++) {
-                        if (tokenIndex >= shuffledTokenIds.length) {
+                        if (!cachedTokenIds.length) {
                             showModal('NFT 数量不足！');
                             throw new Error('NFT 不足');
                         }
-                        const tokenId = shuffledTokenIds[tokenIndex];
+                        const tokenId = cachedTokenIds.shift();
                         const owner = await retryWithBackoff(() => 
                             nftContract.methods.ownerOf(tokenId).call()
                         );
@@ -524,7 +558,6 @@
                         }
                         toAddresses.push(address);
                         selectedTokenIds.push(tokenId);
-                        tokenIndex++;
                     }
                 }
                 showModal(`正在转账 ${totalAmount} 个 NFT...`);
@@ -541,13 +574,13 @@
                     selectedTokenIds
                 ).send({ from: accounts[0], gas: Math.floor(gasEstimate * 1.2) });
                 showModal('批量转账成功！');
-                cachedTokenIds = cachedTokenIds.filter(id => !selectedTokenIds.includes(id));
                 document.getElementById('nftList').innerHTML = `<p>剩余 ${cachedTokenIds.length} 个 NFT，示例：${cachedTokenIds.slice(0, 5).join(', ')}${cachedTokenIds.length > 5 ? ' 等...' : ''}</p>`;
+                document.getElementById('batchTransferBtn').disabled = true;
             } catch (error) {
-                showModal(`批量转账失败: ${error.message.includes('Invalid substring range') ? '无效 tokenId 或接收者地址，请测试单笔转账' : error.message.includes('non ERC721Receiver') ? '接收者地址不支持 ERC721' : error.message.includes('429') ? 'API 速率限制，请稍后重试' : error.message || '未知错误'}`);
+                showModal(`批量转账失败: ${error.message.includes('Not owner or approved') ? '部分 NFT 不属于您或未授权，请重新获取 NFT 或检查授权' : error.message.includes('non ERC721Receiver') ? '接收者地址不支持 ERC721' : error.message.includes('429') ? 'API 速率限制，请稍后重试' : error.message || '未知错误'}`);
             } finally {
                 batchButton.classList.remove('loading');
-                batchButton.disabled = false;
+                batchButton.disabled = !cachedTokenIds.length;
             }
         }
 
@@ -568,6 +601,7 @@
             updateWalletAddress();
             if (newAccounts.length === 0) {
                 document.getElementById('approveBtn').disabled = true;
+                document.getElementById('fetchNFTsBtn').disabled = true;
                 document.getElementById('batchTransferBtn').disabled = true;
             } else {
                 connectWallet();
